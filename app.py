@@ -24,6 +24,11 @@ EXAMPLE_IMG_PATH = ASSETS_DIR / "example.png"
 PRESETS_DIR = APP_DIR / "presets"
 PRESETS_PATH = PRESETS_DIR / "scene_presets.json"
 
+# Ensure folders exist (important for Streamlit Cloud + git empty dirs)
+LUT_DIR.mkdir(parents=True, exist_ok=True)
+ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+PRESETS_DIR.mkdir(parents=True, exist_ok=True)
+
 # Export backend config (always ON)
 PRESERVE_AUDIO_ALWAYS_ON = True
 ENABLE_LOCAL_SAVE_DIALOG = True  # local-only "Save As..." dialog via tkinter
@@ -185,8 +190,19 @@ def list_lut_paths() -> List[Path]:
     return sorted(LUT_DIR.glob("*.cube"), key=lambda p: p.name.lower())
 
 @st.cache_data(show_spinner=False)
-def load_lut_bytes_map() -> Dict[str, bytes]:
+def load_lut_bytes_map_disk() -> Dict[str, bytes]:
     return {p.name: p.read_bytes() for p in list_lut_paths()}
+
+def get_lut_map() -> Dict[str, bytes]:
+    """
+    Combine:
+      - LUTs on disk: ./luts/*.cube
+      - LUTs uploaded this session: st.session_state["uploaded_luts"]
+    This makes Streamlit Cloud reliable (uploads still show even if FS is ephemeral).
+    """
+    m = load_lut_bytes_map_disk()
+    m.update(st.session_state.get("uploaded_luts", {}))
+    return m
 
 # -----------------------------
 # Video helpers
@@ -268,13 +284,10 @@ def save_preset(entry: dict) -> None:
     PRESETS_PATH.write_text(json.dumps(presets, indent=2), encoding="utf-8")
 
 def queue_apply_preset(p: dict) -> None:
-    # IMPORTANT: don't mutate widget keys after instantiation.
-    # We queue and apply at the very top of the next run.
     st.session_state["_pending_preset"] = p
     st.rerun()
 
 def apply_preset_early(p: dict, lut_names: List[str]) -> None:
-    # This is called BEFORE widgets are created.
     st.session_state["compare_mode"] = p.get("compare_mode", "LUT A vs Original")
     st.session_state["assume_order"] = bool(p.get("assume_order", False))
     st.session_state["strength_a"] = float(p.get("strength_a", 1.0))
@@ -294,18 +307,24 @@ def apply_preset_early(p: dict, lut_names: List[str]) -> None:
             st.session_state["lut_b_name"] = lut_names[min(1, len(lut_names) - 1)]
 
 # ============================================================
-# Load LUTs early + init session defaults
+# Session defaults (uploaded LUTs are session-only on Cloud)
 # ============================================================
-lut_map = load_lut_bytes_map()
+st.session_state.setdefault("uploaded_luts", {})
+
+# Build lut_map (disk + session uploads)
+lut_map = get_lut_map()
 lut_names = sorted(lut_map.keys())
 
-# Apply queued preset BEFORE widgets exist (fixes your error)
+# Apply queued preset BEFORE widgets exist
 if "_pending_preset" in st.session_state:
     pending = st.session_state.pop("_pending_preset")
+    # Rebuild names in case preset depends on just-uploaded LUTs
+    lut_map = get_lut_map()
+    lut_names = sorted(lut_map.keys())
     if lut_names:
         apply_preset_early(pending, lut_names)
 
-# Init defaults (safe)
+# Init UI defaults
 st.session_state.setdefault("assume_order", False)
 st.session_state.setdefault("compare_mode", "LUT A vs Original")
 st.session_state.setdefault("strength_a", 1.0)
@@ -320,7 +339,7 @@ if lut_names:
 with st.sidebar:
     st.header("🎛️ LUT Library")
 
-    # --- Presets dropdown (replaces Refresh) ---
+    # --- Presets dropdown ---
     presets = load_presets()
 
     def preset_label(p: dict) -> str:
@@ -347,21 +366,29 @@ with st.sidebar:
 
     st.divider()
 
-    # --- Upload LUTs -> save into ./luts ---
+    # --- Upload LUTs ---
     st.subheader("➕ Add LUTs (.cube)")
     uploaded_luts = st.file_uploader(
-        "Upload one or more .cube files (saved to /luts)",
+        "Upload one or more .cube files (saved to /luts + available this session)",
         type=["cube"],
         accept_multiple_files=True,
     )
     if uploaded_luts:
+        # Save to disk (may be ephemeral on Streamlit Cloud, but ok)
         LUT_DIR.mkdir(parents=True, exist_ok=True)
-        for f in uploaded_luts:
-            out_path = LUT_DIR / f.name
-            with open(out_path, "wb") as w:
-                w.write(f.getvalue())
 
-        st.success(f"Saved {len(uploaded_luts)} LUT(s) to {LUT_DIR}")
+        # Also keep in session_state (guaranteed to work while app is running)
+        for f in uploaded_luts:
+            b = f.getvalue()
+            st.session_state["uploaded_luts"][f.name] = b
+            out_path = LUT_DIR / f.name
+            try:
+                with open(out_path, "wb") as w:
+                    w.write(b)
+            except Exception:
+                pass
+
+        st.success(f"Loaded {len(uploaded_luts)} LUT(s).")
         st.cache_data.clear()
         st.rerun()
 
@@ -373,8 +400,12 @@ with st.sidebar:
     )
     assume_bgr_major = not assume_order
 
+    # Refresh lut_map view for sidebar
+    lut_map = get_lut_map()
+    lut_names = sorted(lut_map.keys())
+
     st.caption(f"LUT folder: `{LUT_DIR}`")
-    st.caption(f"Found **{len(lut_map)}** LUT(s).")
+    st.caption(f"Found **{len(lut_names)}** LUT(s).")
 
     st.divider()
     st.subheader("🖼️ Previews (one-click select)")
@@ -423,8 +454,12 @@ with controls:
         video_file = st.file_uploader("Upload video", type=["mp4", "mov", "mkv", "avi", "webm"])
 
     with c2:
+        # Always rebuild lut_map (disk + session uploads)
+        lut_map = get_lut_map()
+        lut_names = sorted(lut_map.keys())
+
         if not lut_names:
-            st.error("No LUTs available. Add .cube files into ./luts/")
+            st.error("No LUTs available. Add .cube files into ./luts/ (or upload them in the sidebar).")
             st.stop()
 
         # keep selectboxes synced
@@ -505,6 +540,9 @@ frames_bgr, meta = extract_three_frames(video_path)
 frames_rgb = [bgr_to_rgb_u8(f) for f in frames_bgr]
 
 st.caption(f"Frames: start={meta['idxs'][0]}, mid={meta['idxs'][1]}, end={meta['idxs'][2]} | fps≈{meta['fps']:.2f}")
+
+# Rebuild lut_map right before applying
+lut_map = get_lut_map()
 
 def apply_named(rgb: np.ndarray, lut_name: str, strength: float) -> np.ndarray:
     lut = load_cube_lut(lut_map[lut_name], assume_bgr_major=assume_bgr_major)
