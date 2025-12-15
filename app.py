@@ -15,19 +15,65 @@ from PIL import Image
 from streamlit_image_comparison import image_comparison
 
 # ============================================================
-# Project structure
+# Robust path resolution (works whether app.py is in repo root or subfolder)
 # ============================================================
-APP_DIR = Path(__file__).parent
-LUT_DIR = APP_DIR / "luts"               # ./luts/*.cube
-ASSETS_DIR = APP_DIR / "assets"          # ./assets/example.png
-EXAMPLE_IMG_PATH = ASSETS_DIR / "example.png"
-PRESETS_DIR = APP_DIR / "presets"
-PRESETS_PATH = PRESETS_DIR / "scene_presets.json"
+APP_DIR = Path(__file__).resolve().parent
+CWD_DIR = Path.cwd().resolve()
+PARENT_DIR = APP_DIR.parent.resolve()
 
-# Ensure folders exist (important for Streamlit Cloud + git empty dirs)
-LUT_DIR.mkdir(parents=True, exist_ok=True)
-ASSETS_DIR.mkdir(parents=True, exist_ok=True)
-PRESETS_DIR.mkdir(parents=True, exist_ok=True)
+def _pick_dir(folder_name: str, must_contain_ext: Optional[str] = None) -> Path:
+    """
+    Pick a directory among common candidates:
+      - APP_DIR/folder_name
+      - CWD_DIR/folder_name   (repo root on Streamlit Cloud)
+      - PARENT_DIR/folder_name
+    If must_contain_ext is provided, prefer the first directory that contains files of that ext.
+    Otherwise prefer the first existing directory.
+    If none exist, create APP_DIR/folder_name.
+    """
+    candidates = [
+        APP_DIR / folder_name,
+        CWD_DIR / folder_name,
+        PARENT_DIR / folder_name,
+    ]
+
+    # Prefer directories that actually contain expected files
+    if must_contain_ext:
+        for d in candidates:
+            if d.exists() and d.is_dir() and any(d.glob(f"*{must_contain_ext}")):
+                return d
+
+    # Otherwise choose first existing directory
+    for d in candidates:
+        if d.exists() and d.is_dir():
+            return d
+
+    # Create a default next to app.py
+    d = APP_DIR / folder_name
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+LUT_DIR = _pick_dir("luts", must_contain_ext=".cube")
+ASSETS_DIR = _pick_dir("assets")
+PRESETS_DIR = _pick_dir("presets")
+
+# Example image can be in multiple places; search a few common paths
+def _find_example_image() -> Optional[Path]:
+    candidates = [
+        ASSETS_DIR / "example.png",
+        ASSETS_DIR / "example.jpg",
+        ASSETS_DIR / "example.jpeg",
+        APP_DIR / "example.png",
+        CWD_DIR / "assets" / "example.png",
+        PARENT_DIR / "assets" / "example.png",
+    ]
+    for p in candidates:
+        if p.exists() and p.is_file():
+            return p
+    return None
+
+EXAMPLE_IMG_PATH = _find_example_image()
+PRESETS_PATH = PRESETS_DIR / "scene_presets.json"
 
 # Export backend config (always ON)
 PRESERVE_AUDIO_ALWAYS_ON = True
@@ -181,12 +227,11 @@ def apply_lut_trilinear(rgb_u8: np.ndarray, lut: CubeLUT, strength: float = 1.0)
     return (out * 255.0 + 0.5).astype(np.uint8)
 
 # -----------------------------
-# LUT library (disk)
+# LUT library (disk + session uploads)
 # -----------------------------
 @st.cache_data(show_spinner=False)
 def list_lut_paths() -> List[Path]:
-    if not LUT_DIR.exists():
-        return []
+    LUT_DIR.mkdir(parents=True, exist_ok=True)
     return sorted(LUT_DIR.glob("*.cube"), key=lambda p: p.name.lower())
 
 @st.cache_data(show_spinner=False)
@@ -194,14 +239,8 @@ def load_lut_bytes_map_disk() -> Dict[str, bytes]:
     return {p.name: p.read_bytes() for p in list_lut_paths()}
 
 def get_lut_map() -> Dict[str, bytes]:
-    """
-    Combine:
-      - LUTs on disk: ./luts/*.cube
-      - LUTs uploaded this session: st.session_state["uploaded_luts"]
-    This makes Streamlit Cloud reliable (uploads still show even if FS is ephemeral).
-    """
     m = load_lut_bytes_map_disk()
-    m.update(st.session_state.get("uploaded_luts", {}))
+    m.update(st.session_state.get("uploaded_luts", {}))  # session-safe on Cloud
     return m
 
 # -----------------------------
@@ -293,42 +332,35 @@ def apply_preset_early(p: dict, lut_names: List[str]) -> None:
     st.session_state["strength_a"] = float(p.get("strength_a", 1.0))
 
     lut_a = p.get("lut_a_name", lut_names[0] if lut_names else None)
-    if lut_a in lut_names:
-        st.session_state["lut_a_name"] = lut_a
-    elif lut_names:
-        st.session_state["lut_a_name"] = lut_names[0]
+    st.session_state["lut_a_name"] = lut_a if lut_a in lut_names else (lut_names[0] if lut_names else None)
 
     if st.session_state["compare_mode"] == "LUT A vs LUT B":
         st.session_state["strength_b"] = float(p.get("strength_b", 1.0))
-        lut_b = p.get("lut_b_name", lut_names[min(1, len(lut_names) - 1)] if lut_names else None)
-        if lut_b in lut_names:
-            st.session_state["lut_b_name"] = lut_b
-        elif lut_names:
-            st.session_state["lut_b_name"] = lut_names[min(1, len(lut_names) - 1)]
+        default_b = lut_names[min(1, len(lut_names) - 1)] if lut_names else None
+        lut_b = p.get("lut_b_name", default_b)
+        st.session_state["lut_b_name"] = lut_b if lut_b in lut_names else default_b
 
 # ============================================================
-# Session defaults (uploaded LUTs are session-only on Cloud)
+# Session defaults
 # ============================================================
 st.session_state.setdefault("uploaded_luts", {})
+st.session_state.setdefault("assume_order", False)
+st.session_state.setdefault("compare_mode", "LUT A vs Original")
+st.session_state.setdefault("strength_a", 1.0)
+st.session_state.setdefault("strength_b", 1.0)
 
-# Build lut_map (disk + session uploads)
 lut_map = get_lut_map()
 lut_names = sorted(lut_map.keys())
 
 # Apply queued preset BEFORE widgets exist
 if "_pending_preset" in st.session_state:
     pending = st.session_state.pop("_pending_preset")
-    # Rebuild names in case preset depends on just-uploaded LUTs
     lut_map = get_lut_map()
     lut_names = sorted(lut_map.keys())
     if lut_names:
         apply_preset_early(pending, lut_names)
 
-# Init UI defaults
-st.session_state.setdefault("assume_order", False)
-st.session_state.setdefault("compare_mode", "LUT A vs Original")
-st.session_state.setdefault("strength_a", 1.0)
-st.session_state.setdefault("strength_b", 1.0)
+# Init LUT selection defaults if available
 if lut_names:
     st.session_state.setdefault("lut_a_name", lut_names[0])
     st.session_state.setdefault("lut_b_name", lut_names[min(1, len(lut_names) - 1)])
@@ -339,7 +371,7 @@ if lut_names:
 with st.sidebar:
     st.header("🎛️ LUT Library")
 
-    # --- Presets dropdown ---
+    # Presets dropdown
     presets = load_presets()
 
     def preset_label(p: dict) -> str:
@@ -366,24 +398,21 @@ with st.sidebar:
 
     st.divider()
 
-    # --- Upload LUTs ---
+    # Upload LUTs
     st.subheader("➕ Add LUTs (.cube)")
     uploaded_luts = st.file_uploader(
-        "Upload one or more .cube files (saved to /luts + available this session)",
+        "Upload one or more .cube files (available this session; also tries saving to /luts)",
         type=["cube"],
         accept_multiple_files=True,
     )
-    if uploaded_luts:
-        # Save to disk (may be ephemeral on Streamlit Cloud, but ok)
-        LUT_DIR.mkdir(parents=True, exist_ok=True)
 
-        # Also keep in session_state (guaranteed to work while app is running)
+    if uploaded_luts:
+        LUT_DIR.mkdir(parents=True, exist_ok=True)
         for f in uploaded_luts:
             b = f.getvalue()
-            st.session_state["uploaded_luts"][f.name] = b
-            out_path = LUT_DIR / f.name
+            st.session_state["uploaded_luts"][f.name] = b  # always works for this running app
             try:
-                with open(out_path, "wb") as w:
+                with open(LUT_DIR / f.name, "wb") as w:
                     w.write(b)
             except Exception:
                 pass
@@ -394,23 +423,21 @@ with st.sidebar:
 
     st.divider()
 
-    assume_order = st.checkbox(
-        "If colors look wrong, try alternate .cube order",
-        key="assume_order",
-    )
-    assume_bgr_major = not assume_order
+    st.checkbox("If colors look wrong, try alternate .cube order", key="assume_order")
+    assume_bgr_major = not st.session_state["assume_order"]
 
-    # Refresh lut_map view for sidebar
+    # Refresh current lut_map view
     lut_map = get_lut_map()
     lut_names = sorted(lut_map.keys())
 
     st.caption(f"LUT folder: `{LUT_DIR}`")
     st.caption(f"Found **{len(lut_names)}** LUT(s).")
+    st.caption(f"Example image: `{EXAMPLE_IMG_PATH}`" if EXAMPLE_IMG_PATH else "Example image: (not found)")
 
     st.divider()
     st.subheader("🖼️ Previews (one-click select)")
 
-    if EXAMPLE_IMG_PATH.exists() and lut_map:
+    if EXAMPLE_IMG_PATH and EXAMPLE_IMG_PATH.exists() and lut_map:
         ex_pil = Image.open(EXAMPLE_IMG_PATH).convert("RGB")
         ex_rgb = np.array(ex_pil, dtype=np.uint8)
 
@@ -425,7 +452,7 @@ with st.sidebar:
                 try:
                     lut = load_cube_lut(b, assume_bgr_major=assume_bgr_major)
                     applied = apply_lut_trilinear(ex_rgb, lut, strength=1.0)
-                    st.image(applied, caption="Applied on example.png", use_container_width=True)
+                    st.image(applied, caption="Applied on example image", use_container_width=True)
 
                     r = st.columns([1, 1])
                     with r[0]:
@@ -437,11 +464,10 @@ with st.sidebar:
                             st.session_state["compare_mode"] = "LUT A vs LUT B"
                             st.session_state["lut_b_name"] = name
                             st.rerun()
-
                 except Exception as e:
                     st.warning(f"Could not preview {name}: {e}")
     else:
-        st.info("Add `./assets/example.png` to enable sidebar preview thumbnails.")
+        st.info("To enable sidebar thumbnails: add `assets/example.png` (either repo root/assets or next to app.py/assets).")
 
 # -----------------------------
 # Controls row (Row 1)
@@ -454,15 +480,13 @@ with controls:
         video_file = st.file_uploader("Upload video", type=["mp4", "mov", "mkv", "avi", "webm"])
 
     with c2:
-        # Always rebuild lut_map (disk + session uploads)
         lut_map = get_lut_map()
         lut_names = sorted(lut_map.keys())
 
         if not lut_names:
-            st.error("No LUTs available. Add .cube files into ./luts/ (or upload them in the sidebar).")
+            st.error("No LUTs available. Add .cube files into /luts (repo root or next to app.py), or upload them in the sidebar.")
             st.stop()
 
-        # keep selectboxes synced
         if st.session_state.get("lut_a_name") not in lut_names:
             st.session_state["lut_a_name"] = lut_names[0]
         if st.session_state.get("lut_b_name") not in lut_names:
@@ -470,7 +494,6 @@ with controls:
 
         st.selectbox("LUT A", lut_names, key="lut_a_name")
         st.selectbox("Compare mode", ["LUT A vs Original", "LUT A vs LUT B"], key="compare_mode")
-
         if st.session_state["compare_mode"] == "LUT A vs LUT B":
             st.selectbox("LUT B", lut_names, key="lut_b_name")
 
@@ -541,7 +564,6 @@ frames_rgb = [bgr_to_rgb_u8(f) for f in frames_bgr]
 
 st.caption(f"Frames: start={meta['idxs'][0]}, mid={meta['idxs'][1]}, end={meta['idxs'][2]} | fps≈{meta['fps']:.2f}")
 
-# Rebuild lut_map right before applying
 lut_map = get_lut_map()
 
 def apply_named(rgb: np.ndarray, lut_name: str, strength: float) -> np.ndarray:
@@ -553,20 +575,16 @@ def apply_named(rgb: np.ndarray, lut_name: str, strength: float) -> np.ndarray:
 # -----------------------------
 st.subheader("Preview (Start / Middle / End)")
 p1, p2, p3 = st.columns(3)
-labels = ["Start", "Middle", "End"]
-cols = [p1, p2, p3]
 
 lut_a = st.session_state["lut_a_name"]
 strength_a = float(st.session_state["strength_a"])
-
 compare_mode = st.session_state["compare_mode"]
 lut_b = st.session_state.get("lut_b_name")
 strength_b = float(st.session_state.get("strength_b", 1.0))
 
-for i, (col, label, rgb) in enumerate(zip(cols, labels, frames_rgb)):
+for i, (col, label, rgb) in enumerate(zip([p1, p2, p3], ["Start", "Middle", "End"], frames_rgb)):
     with col:
         st.markdown(f"**{label}**")
-
         if compare_mode == "LUT A vs Original":
             out = apply_named(rgb, lut_a, strength_a)
             img1 = save_rgb_to_png_path(rgb, f"orig_{label}_{i}")
@@ -575,7 +593,6 @@ for i, (col, label, rgb) in enumerate(zip(cols, labels, frames_rgb)):
         else:
             a_img = apply_named(rgb, lut_a, strength_a)
             b_img = apply_named(rgb, lut_b, strength_b)
-
             img1 = save_rgb_to_png_path(a_img, f"lutA_{label}_{i}")
             img2 = save_rgb_to_png_path(b_img, f"lutB_{label}_{i}")
             image_comparison(
