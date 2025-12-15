@@ -1,0 +1,14 @@
+[
+  {
+    "scene": "Scene 1",
+    "saved_target": "LUT B",
+    "compare_mode": "LUT A vs LUT B",
+    "lut_a_name": "dynamic_saturated.cube",
+    "strength_a": 0.39,
+    "assume_order": false,
+    "lut_b_name": "retro_vibes.cube",
+    "strength_b": 0.24,
+    "lut_primary": "retro_vibes.cube",
+    "strength_primary": 0.24
+  }
+]
