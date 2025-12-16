@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+# System deps (ffmpeg + OpenCV runtime deps)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libgl1 \
+    libglib2.0-0 \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install python deps
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy app
+COPY . /app
+
+# Railway provides $PORT
+ENV PORT=8080
+EXPOSE 8080
+
+# Streamlit config for container
+CMD ["sh", "-c", "streamlit run app.py --server.address 0.0.0.0 --server.port $PORT --server.headless true"]
