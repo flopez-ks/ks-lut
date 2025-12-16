@@ -21,6 +21,7 @@ APP_DIR = Path(__file__).resolve().parent
 CWD_DIR = Path.cwd().resolve()
 PARENT_DIR = APP_DIR.parent.resolve()
 
+
 def _pick_dir(folder_name: str, must_contain_ext: Optional[str] = None) -> Path:
     """
     Pick a directory among common candidates:
@@ -37,27 +38,25 @@ def _pick_dir(folder_name: str, must_contain_ext: Optional[str] = None) -> Path:
         PARENT_DIR / folder_name,
     ]
 
-    # Prefer directories that actually contain expected files
     if must_contain_ext:
         for d in candidates:
             if d.exists() and d.is_dir() and any(d.glob(f"*{must_contain_ext}")):
                 return d
 
-    # Otherwise choose first existing directory
     for d in candidates:
         if d.exists() and d.is_dir():
             return d
 
-    # Create a default next to app.py
     d = APP_DIR / folder_name
     d.mkdir(parents=True, exist_ok=True)
     return d
+
 
 LUT_DIR = _pick_dir("luts", must_contain_ext=".cube")
 ASSETS_DIR = _pick_dir("assets")
 PRESETS_DIR = _pick_dir("presets")
 
-# Example image can be in multiple places; search a few common paths
+
 def _find_example_image() -> Optional[Path]:
     candidates = [
         ASSETS_DIR / "example.png",
@@ -72,10 +71,11 @@ def _find_example_image() -> Optional[Path]:
             return p
     return None
 
+
 EXAMPLE_IMG_PATH = _find_example_image()
 PRESETS_PATH = PRESETS_DIR / "scene_presets.json"
 
-# Export backend config (always ON)
+# Export backend config
 PRESERVE_AUDIO_ALWAYS_ON = True
 ENABLE_LOCAL_SAVE_DIALOG = True  # local-only "Save As..." dialog via tkinter
 
@@ -89,10 +89,12 @@ st.caption("Upload a video, preview 3 frames with a before/after slider, compare
 def running_on_streamlit_cloud() -> bool:
     return bool(os.environ.get("STREAMLIT_CLOUD")) or "streamlit.app" in os.environ.get("HOSTNAME", "")
 
+
 def gui_available() -> bool:
     if os.name == "nt":
         return True
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
 
 # -----------------------------
 # LUT parsing + application
@@ -104,10 +106,13 @@ class CubeLUT:
     domain_max: np.ndarray
     table: np.ndarray  # [b,g,r,3]
 
+
 CUBE_RE_FLOAT = re.compile(r"[-+]?\d*\.\d+|[-+]?\d+")
+
 
 def _parse_floats(line: str) -> List[float]:
     return [float(x) for x in CUBE_RE_FLOAT.findall(line)]
+
 
 @st.cache_data(show_spinner=False)
 def load_cube_lut(cube_bytes: bytes, assume_bgr_major: bool = True) -> CubeLUT:
@@ -150,12 +155,13 @@ def load_cube_lut(cube_bytes: bytes, assume_bgr_major: bool = True) -> CubeLUT:
         raise ValueError(f".cube incomplete: got {len(data)} rows, expected {expected}.")
 
     data = np.asarray(data[:expected], dtype=np.float32)
-    table = data.reshape((size, size, size, 3))  # [b,g,r,3] if assumption holds
+    table = data.reshape((size, size, size, 3))
 
     if not assume_bgr_major:
         table = table.transpose(2, 1, 0, 3)
 
     return CubeLUT(size=size, domain_min=domain_min, domain_max=domain_max, table=table)
+
 
 def apply_lut_trilinear(rgb_u8: np.ndarray, lut: CubeLUT, strength: float = 1.0) -> np.ndarray:
     if rgb_u8.dtype != np.uint8:
@@ -190,9 +196,12 @@ def apply_lut_trilinear(rgb_u8: np.ndarray, lut: CubeLUT, strength: float = 1.0)
     db = (b - b0).astype(np.float32)
 
     H, W = r0.shape
-    r0f = r0.reshape(-1); r1f = r1.reshape(-1)
-    g0f = g0.reshape(-1); g1f = g1.reshape(-1)
-    b0f = b0.reshape(-1); b1f = b1.reshape(-1)
+    r0f = r0.reshape(-1)
+    r1f = r1.reshape(-1)
+    g0f = g0.reshape(-1)
+    g1f = g1.reshape(-1)
+    b0f = b0.reshape(-1)
+    b1f = b1.reshape(-1)
 
     drf = dr.reshape(-1)[:, None]
     dgf = dg.reshape(-1)[:, None]
@@ -226,6 +235,7 @@ def apply_lut_trilinear(rgb_u8: np.ndarray, lut: CubeLUT, strength: float = 1.0)
 
     return (out * 255.0 + 0.5).astype(np.uint8)
 
+
 # -----------------------------
 # LUT library (disk + session uploads)
 # -----------------------------
@@ -234,14 +244,17 @@ def list_lut_paths() -> List[Path]:
     LUT_DIR.mkdir(parents=True, exist_ok=True)
     return sorted(LUT_DIR.glob("*.cube"), key=lambda p: p.name.lower())
 
+
 @st.cache_data(show_spinner=False)
 def load_lut_bytes_map_disk() -> Dict[str, bytes]:
     return {p.name: p.read_bytes() for p in list_lut_paths()}
 
+
 def get_lut_map() -> Dict[str, bytes]:
     m = load_lut_bytes_map_disk()
-    m.update(st.session_state.get("uploaded_luts", {}))  # session-safe on Cloud
+    m.update(st.session_state.get("uploaded_luts", {}))
     return m
+
 
 # -----------------------------
 # Video helpers
@@ -254,12 +267,14 @@ def _write_uploaded_to_temp(uploaded_file) -> str:
         f.write(uploaded_file.getvalue())
     return path
 
+
 def _read_frame_at(cap: cv2.VideoCapture, frame_idx: int) -> Optional[np.ndarray]:
     cap.set(cv2.CAP_PROP_POS_FRAMES, int(max(frame_idx, 0)))
     ok, frame_bgr = cap.read()
     if not ok or frame_bgr is None:
         return None
     return frame_bgr
+
 
 @st.cache_data(show_spinner=False)
 def extract_three_frames(video_path: str) -> Tuple[List[np.ndarray], Dict]:
@@ -288,8 +303,10 @@ def extract_three_frames(video_path: str) -> Tuple[List[np.ndarray], Dict]:
     meta = {"frame_count": frame_count, "fps": fps, "idxs": idxs}
     return frames, meta
 
+
 def bgr_to_rgb_u8(frame_bgr: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
 
 # -----------------------------
 # Temp image saving for image_comparison
@@ -299,11 +316,13 @@ def get_session_tmpdir() -> str:
         st.session_state["tmpdir"] = tempfile.mkdtemp(prefix="kslut_")
     return st.session_state["tmpdir"]
 
+
 def save_rgb_to_png_path(rgb_u8: np.ndarray, name: str) -> str:
     tmpdir = get_session_tmpdir()
     path = os.path.join(tmpdir, f"{name}.png")
     Image.fromarray(rgb_u8, mode="RGB").save(path, format="PNG")
     return path
+
 
 # -----------------------------
 # Presets
@@ -316,15 +335,18 @@ def load_presets() -> List[dict]:
     except Exception:
         return []
 
+
 def save_preset(entry: dict) -> None:
     PRESETS_DIR.mkdir(parents=True, exist_ok=True)
     presets = load_presets()
     presets.append(entry)
     PRESETS_PATH.write_text(json.dumps(presets, indent=2), encoding="utf-8")
 
+
 def queue_apply_preset(p: dict) -> None:
     st.session_state["_pending_preset"] = p
     st.rerun()
+
 
 def apply_preset_early(p: dict, lut_names: List[str]) -> None:
     st.session_state["compare_mode"] = p.get("compare_mode", "LUT A vs Original")
@@ -340,6 +362,7 @@ def apply_preset_early(p: dict, lut_names: List[str]) -> None:
         lut_b = p.get("lut_b_name", default_b)
         st.session_state["lut_b_name"] = lut_b if lut_b in lut_names else default_b
 
+
 # ============================================================
 # Session defaults
 # ============================================================
@@ -352,7 +375,6 @@ st.session_state.setdefault("strength_b", 1.0)
 lut_map = get_lut_map()
 lut_names = sorted(lut_map.keys())
 
-# Apply queued preset BEFORE widgets exist
 if "_pending_preset" in st.session_state:
     pending = st.session_state.pop("_pending_preset")
     lut_map = get_lut_map()
@@ -360,20 +382,17 @@ if "_pending_preset" in st.session_state:
     if lut_names:
         apply_preset_early(pending, lut_names)
 
-# Init LUT selection defaults if available
 if lut_names:
     st.session_state.setdefault("lut_a_name", lut_names[0])
     st.session_state.setdefault("lut_b_name", lut_names[min(1, len(lut_names) - 1)])
 
-# -----------------------------   
+
+# -----------------------------
 # Sidebar
 # -----------------------------
-
-
 with st.sidebar:
     st.header("🎛️ LUT Library")
 
-    # Presets dropdown
     presets = load_presets()
 
     def preset_label(p: dict) -> str:
@@ -400,7 +419,6 @@ with st.sidebar:
 
     st.divider()
 
-    # Upload LUTs
     st.subheader("➕ Add LUTs (.cube)")
     uploaded_luts = st.file_uploader(
         "Upload one or more .cube files (available this session; also tries saving to /luts)",
@@ -412,7 +430,7 @@ with st.sidebar:
         LUT_DIR.mkdir(parents=True, exist_ok=True)
         for f in uploaded_luts:
             b = f.getvalue()
-            st.session_state["uploaded_luts"][f.name] = b  # always works for this running app
+            st.session_state["uploaded_luts"][f.name] = b
             try:
                 with open(LUT_DIR / f.name, "wb") as w:
                     w.write(b)
@@ -428,7 +446,6 @@ with st.sidebar:
     st.checkbox("If colors look wrong, try alternate .cube order", key="assume_order")
     assume_bgr_major = not st.session_state["assume_order"]
 
-    # Refresh current lut_map view
     lut_map = get_lut_map()
     lut_names = sorted(lut_map.keys())
 
@@ -470,6 +487,7 @@ with st.sidebar:
                     st.warning(f"Could not preview {name}: {e}")
     else:
         st.info("To enable sidebar thumbnails: add `assets/example.png` (either repo root/assets or next to app.py/assets).")
+
 
 # -----------------------------
 # Controls row (Row 1)
@@ -568,9 +586,11 @@ st.caption(f"Frames: start={meta['idxs'][0]}, mid={meta['idxs'][1]}, end={meta['
 
 lut_map = get_lut_map()
 
+
 def apply_named(rgb: np.ndarray, lut_name: str, strength: float) -> np.ndarray:
     lut = load_cube_lut(lut_map[lut_name], assume_bgr_major=assume_bgr_major)
     return apply_lut_trilinear(rgb, lut, strength=strength)
+
 
 # -----------------------------
 # Previews (Row 2) -> 3 columns
@@ -615,8 +635,8 @@ out_name = st.text_input("Output filename", value=f"export_{Path(video_file.name
 
 from shutil import which
 
+
 def get_ffmpeg_path() -> Optional[str]:
-    # Optional: allow overriding via env var
     env = os.environ.get("FFMPEG_PATH")
     if env and Path(env).exists():
         return str(Path(env))
@@ -625,7 +645,6 @@ def get_ffmpeg_path() -> Optional[str]:
     if p:
         return p
 
-    # Works on Streamlit Cloud too (downloads/ships ffmpeg)
     try:
         import imageio_ffmpeg
         return imageio_ffmpeg.get_ffmpeg_exe()
@@ -633,17 +652,128 @@ def get_ffmpeg_path() -> Optional[str]:
         return None
 
 
+def export_video_with_lut_opencv(input_path: str, output_path: str, lut_name: str, strength: float, assume_bgr_major: bool):
+    """Slow fallback export using OpenCV + our LUT implementation."""
+    lut = load_cube_lut(lut_map[lut_name], assume_bgr_major=assume_bgr_major)
+
+    cap = cv2.VideoCapture(input_path)
+    if not cap.isOpened():
+        raise ValueError("Could not open video for export.")
+
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
+
+    while True:
+        ok, frame_bgr = cap.read()
+        if not ok or frame_bgr is None:
+            break
+        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        rgb_out = apply_lut_trilinear(rgb, lut, strength=strength)
+        bgr_out = cv2.cvtColor(rgb_out, cv2.COLOR_RGB2BGR)
+        writer.write(bgr_out)
+
+    cap.release()
+    writer.release()
+
+
+def export_video_with_lut(input_path: str, output_path: str, lut_name: str, strength: float) -> str:
+    """
+    Preferred export path:
+      - If ffmpeg is available: apply LUT via ffmpeg lut3d filter (fast) and keep audio.
+      - If strength < 1.0: we blend via ffmpeg (format+blend) for a true "strength" effect.
+      - If ffmpeg missing: fallback to OpenCV (video-only), audio merged later if possible.
+    Returns path to a video file containing processed video (may or may not include audio).
+    """
+    ffmpeg = get_ffmpeg_path()
+    lut_file = LUT_DIR / lut_name
+
+    # If LUT is only in session (uploaded), write it to disk so ffmpeg can read it
+    if not lut_file.exists() and lut_name in st.session_state.get("uploaded_luts", {}):
+        try:
+            LUT_DIR.mkdir(parents=True, exist_ok=True)
+            lut_file.write_bytes(st.session_state["uploaded_luts"][lut_name])
+        except Exception:
+            pass
+
+        if ffmpeg and lut_file.exists():
+            lut_path = str(lut_file).replace("\\", "/")   # ffmpeg friendly on Windows too
+            lut_path_esc = lut_path.replace("'", r"\'")   # escape single quotes for ffmpeg
+
+            # -------------------------
+            # Strength == 1.0 (fast path)
+            # -------------------------
+            if strength >= 0.999:
+                cmd = [
+                    ffmpeg, "-y",
+                    "-i", input_path,
+                    "-vf", f"lut3d=file='{lut_path_esc}'",
+                    "-c:v", "libx264",
+                    "-crf", "18",
+                    "-preset", "veryfast",
+                    "-pix_fmt", "yuv420p",
+                    "-c:a", "copy",
+                    "-movflags", "+faststart",
+                    output_path,
+                ]
+                r = subprocess.run(cmd, capture_output=True, text=True)
+                if Path(output_path).exists() and Path(output_path).stat().st_size > 0 and r.returncode == 0:
+                    return output_path
+
+            # -------------------------
+            # Strength < 1.0 (blend path)
+            # -------------------------
+            alpha = float(np.clip(strength, 0.0, 1.0))
+            filter_complex = (
+                f"[0:v]format=rgba[orig];"
+                f"[0:v]lut3d=file='{lut_path_esc}',format=rgba[lut];"
+                f"[orig][lut]blend=all_mode=normal:all_opacity={alpha},format=yuv420p[outv]"
+            )
+
+            cmd = [
+                ffmpeg, "-y",
+                "-i", input_path,
+                "-filter_complex", filter_complex,
+                "-map", "[outv]",
+                "-map", "0:a:0?",
+                "-c:v", "libx264",
+                "-crf", "18",
+                "-preset", "veryfast",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-ac", "2",
+                "-movflags", "+faststart",
+                output_path,
+            ]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if Path(output_path).exists() and Path(output_path).stat().st_size > 0 and r.returncode == 0:
+                return output_path
+
+            with st.expander("ffmpeg export failed — logs"):
+                st.code(r.stderr or r.stdout or "no output")
+
+
+    # Fallback (OpenCV video-only)
+    export_video_with_lut_opencv(
+        input_path=input_path,
+        output_path=output_path,
+        lut_name=lut_name,
+        strength=strength,
+        assume_bgr_major=assume_bgr_major,
+    )
+    return output_path
+
+
 def merge_audio(processed_video: str, original_video: str, out_path: str) -> str:
-    """
-    Try stream copy first; if it fails, re-encode audio to AAC.
-    Returns path to merged video, or processed_video if merge failed.
-    """
     ffmpeg = get_ffmpeg_path()
     if not ffmpeg:
         st.warning("ffmpeg not found, exporting without audio.")
         return processed_video
 
-    # 1) Attempt: copy audio/video streams (fast, no re-encode)
+    # 1) Attempt: copy audio streams (fast)
     cmd_copy = [
         ffmpeg, "-y",
         "-i", processed_video,
@@ -661,7 +791,7 @@ def merge_audio(processed_video: str, original_video: str, out_path: str) -> str
     if Path(out_path).exists() and Path(out_path).stat().st_size > 0 and r1.returncode == 0:
         return out_path
 
-    # 2) Fallback: re-encode audio to AAC (much more compatible)
+    # 2) Fallback: re-encode audio to AAC
     out_path2 = str(Path(out_path).with_name("video_with_audio_aac.mp4"))
     cmd_aac = [
         ffmpeg, "-y",
@@ -682,7 +812,6 @@ def merge_audio(processed_video: str, original_video: str, out_path: str) -> str
     if Path(out_path2).exists() and Path(out_path2).stat().st_size > 0 and r2.returncode == 0:
         return out_path2
 
-    # Optional: show why it failed (super useful)
     with st.expander("Audio merge failed — ffmpeg logs"):
         st.code("COPY attempt:\n" + (r1.stderr or r1.stdout or "no output"))
         st.code("AAC attempt:\n" + (r2.stderr or r2.stdout or "no output"))
@@ -714,17 +843,22 @@ def local_save_dialog(default_name: str, src_path: str) -> Optional[str]:
     except Exception:
         return None
 
+
 if st.button("🚀 Export LUT A applied video"):
     with st.spinner("Exporting..."):
         tmp_dir = tempfile.mkdtemp()
-        raw_out = os.path.join(tmp_dir, "video_no_audio.mp4")
-        export_video_with_lut(video_path, raw_out, lut_a, strength_a)
+        raw_out = os.path.join(tmp_dir, "video_processed.mp4")
 
-        final_out = merge_audio(raw_out, video_path, os.path.join(tmp_dir, "video_with_audio.mp4"))
+        # ✅ this is now defined (and prefers ffmpeg path)
+        processed_path = export_video_with_lut(video_path, raw_out, lut_a, strength_a)
+
+        # If processed export already includes audio, merge_audio will just re-copy safely
+        final_out = merge_audio(processed_path, video_path, os.path.join(tmp_dir, "video_with_audio.mp4"))
         st.session_state["last_export_path"] = final_out
         st.session_state["last_export_name"] = out_name
 
     st.success("Export complete.")
+
 
 if "last_export_path" in st.session_state and Path(st.session_state["last_export_path"]).exists():
     export_path = st.session_state["last_export_path"]
@@ -742,5 +876,3 @@ if "last_export_path" in st.session_state and Path(st.session_state["last_export
                 st.info("Save cancelled (or dialog unavailable).")
     else:
         st.caption("Note: browsers control download location; use the download prompt, or run locally for Save As…")
-
-
