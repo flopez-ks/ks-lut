@@ -368,6 +368,12 @@ if lut_names:
 # -----------------------------
 # Sidebar
 # -----------------------------
+from pathlib import Path
+st.sidebar.write("APP_DIR:", Path(__file__).resolve().parent)
+st.sidebar.write("LUT_DIR:", (Path(__file__).resolve().parent / "luts"))
+st.sidebar.write("LUT files:", [p.name for p in (Path(__file__).resolve().parent / "luts").glob("*.cube")])
+st.sidebar.write("Example exists:", (Path(__file__).resolve().parent / "assets" / "example.png").exists())
+
 with st.sidebar:
     st.header("🎛️ LUT Library")
 
