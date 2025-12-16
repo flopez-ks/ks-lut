@@ -613,45 +613,39 @@ st.subheader("Export")
 safe_lut = (lut_a or "none").replace(" ", "_")
 out_name = st.text_input("Output filename", value=f"export_{Path(video_file.name).stem}_{safe_lut}.mp4")
 
-def ffmpeg_exists() -> bool:
+from shutil import which
+
+def get_ffmpeg_path() -> Optional[str]:
+    # Optional: allow overriding via env var
+    env = os.environ.get("FFMPEG_PATH")
+    if env and Path(env).exists():
+        return str(Path(env))
+
+    p = which("ffmpeg")
+    if p:
+        return p
+
+    # Works on Streamlit Cloud too (downloads/ships ffmpeg)
     try:
-        subprocess.run(["ffmpeg", "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-        return True
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
     except Exception:
-        return False
+        return None
 
-def export_video_with_lut(input_path: str, output_path: str, lut_name: str, strength: float):
-    lut = load_cube_lut(lut_map[lut_name], assume_bgr_major=assume_bgr_major)
-
-    cap = cv2.VideoCapture(input_path)
-    if not cap.isOpened():
-        raise ValueError("Could not open video for export.")
-
-    fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
-
-    while True:
-        ok, frame_bgr = cap.read()
-        if not ok or frame_bgr is None:
-            break
-        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        rgb_out = apply_lut_trilinear(rgb, lut, strength=strength)
-        bgr_out = cv2.cvtColor(rgb_out, cv2.COLOR_RGB2BGR)
-        writer.write(bgr_out)
-
-    cap.release()
-    writer.release()
 
 def merge_audio(processed_video: str, original_video: str, out_path: str) -> str:
-    if not PRESERVE_AUDIO_ALWAYS_ON or not ffmpeg_exists():
+    """
+    Try stream copy first; if it fails, re-encode audio to AAC.
+    Returns path to merged video, or processed_video if merge failed.
+    """
+    ffmpeg = get_ffmpeg_path()
+    if not ffmpeg:
+        st.warning("ffmpeg not found, exporting without audio.")
         return processed_video
 
-    cmd = [
-        "ffmpeg", "-y",
+    # 1) Attempt: copy audio/video streams (fast, no re-encode)
+    cmd_copy = [
+        ffmpeg, "-y",
         "-i", processed_video,
         "-i", original_video,
         "-map", "0:v:0",
@@ -659,12 +653,43 @@ def merge_audio(processed_video: str, original_video: str, out_path: str) -> str
         "-c:v", "copy",
         "-c:a", "copy",
         "-shortest",
+        "-movflags", "+faststart",
         out_path,
     ]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+    r1 = subprocess.run(cmd_copy, capture_output=True, text=True)
+
+    if Path(out_path).exists() and Path(out_path).stat().st_size > 0 and r1.returncode == 0:
         return out_path
+
+    # 2) Fallback: re-encode audio to AAC (much more compatible)
+    out_path2 = str(Path(out_path).with_name("video_with_audio_aac.mp4"))
+    cmd_aac = [
+        ffmpeg, "-y",
+        "-i", processed_video,
+        "-i", original_video,
+        "-map", "0:v:0",
+        "-map", "1:a:0?",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-ac", "2",
+        "-shortest",
+        "-movflags", "+faststart",
+        out_path2,
+    ]
+    r2 = subprocess.run(cmd_aac, capture_output=True, text=True)
+
+    if Path(out_path2).exists() and Path(out_path2).stat().st_size > 0 and r2.returncode == 0:
+        return out_path2
+
+    # Optional: show why it failed (super useful)
+    with st.expander("Audio merge failed — ffmpeg logs"):
+        st.code("COPY attempt:\n" + (r1.stderr or r1.stdout or "no output"))
+        st.code("AAC attempt:\n" + (r2.stderr or r2.stdout or "no output"))
+
+    st.warning("ffmpeg merge failed, exporting without audio.")
     return processed_video
+
 
 def local_save_dialog(default_name: str, src_path: str) -> Optional[str]:
     try:
