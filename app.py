@@ -365,9 +365,10 @@ if lut_names:
     st.session_state.setdefault("lut_a_name", lut_names[0])
     st.session_state.setdefault("lut_b_name", lut_names[min(1, len(lut_names) - 1)])
 
-# -----------------------------
+# -----------------------------   
 # Sidebar
 # -----------------------------
+
 
 with st.sidebar:
     st.header("🎛️ LUT Library")
