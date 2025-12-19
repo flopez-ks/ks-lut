@@ -79,9 +79,9 @@ PRESETS_PATH = PRESETS_DIR / "scene_presets.json"
 PRESERVE_AUDIO_ALWAYS_ON = True
 ENABLE_LOCAL_SAVE_DIALOG = True  # local-only "Save As..." dialog via tkinter
 
-st.set_page_config(page_title="Video LUT Previewer", layout="wide")
-st.title("🎞️ Video LUT Previewer (.cube)")
-st.caption("Upload a video, preview 3 frames with a before/after slider, compare LUTs, then export.")
+st.set_page_config(page_title="Video & Image LUT Previewer", layout="wide")
+st.title("🎞️ Video & Image LUT Previewer (.cube)")
+st.caption("Upload a video or image, preview with before/after slider, compare LUTs, then export.")
 
 # -----------------------------
 # Local GUI helpers
@@ -538,10 +538,18 @@ with st.sidebar:
 # -----------------------------
 controls = st.container()
 with controls:
-    c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
+    mode_col, c1, c2, c3, c4 = st.columns([1, 2, 2, 1, 1])
+    
+    with mode_col:
+        st.radio("Mode", ["Video", "Image"], key="media_mode", horizontal=True)
 
     with c1:
-        video_file = st.file_uploader("Upload video", type=["mp4", "mov", "mkv", "avi", "webm"])
+        if st.session_state["media_mode"] == "Video":
+            video_file = st.file_uploader("Upload video", type=["mp4", "mov", "mkv", "avi", "webm"])
+            image_file = None
+        else:
+            image_file = st.file_uploader("Upload image", type=["png", "jpg", "jpeg", "bmp", "tiff", "webp"])
+            video_file = None
 
     with c2:
         lut_map = get_lut_map()
@@ -613,20 +621,16 @@ with controls:
                     st.success("Preset saved.")
                     st.rerun()
 
-if not video_file:
-    st.info("Upload a video to begin.")
-    st.stop()
+if st.session_state["media_mode"] == "Video":
+    if not video_file:
+        st.info("Upload a video to begin.")
+        st.stop()
+else:
+    if not image_file:
+        st.info("Upload an image to begin.")
+        st.stop()
 
 assume_bgr_major = not st.session_state["assume_order"]
-
-# -----------------------------
-# Load video + frames
-# -----------------------------
-video_path = _write_uploaded_to_temp(video_file)
-frames_bgr, meta = extract_three_frames(video_path)
-frames_rgb = [bgr_to_rgb_u8(f) for f in frames_bgr]
-
-st.caption(f"Frames: start={meta['idxs'][0]}, mid={meta['idxs'][1]}, end={meta['idxs'][2]} | fps≈{meta['fps']:.2f}")
 
 lut_map = get_lut_map()
 
@@ -642,36 +646,90 @@ def apply_named(rgb: np.ndarray, lut_name: str, strength: float) -> np.ndarray:
 
 
 # -----------------------------
-# Previews (Row 2) -> 3 columns
+# Load media + prepare previews
 # -----------------------------
-st.subheader("Preview (Start / Middle / End)")
-p1, p2, p3 = st.columns(3)
-
-lut_a = st.session_state["lut_a_name"]
-strength_a = float(st.session_state["strength_a"])
-compare_mode = st.session_state["compare_mode"]
-lut_b = st.session_state.get("lut_b_name")
-strength_b = float(st.session_state.get("strength_b", 1.0))
-
-for i, (col, label, rgb) in enumerate(zip([p1, p2, p3], ["Start", "Middle", "End"], frames_rgb)):
-    with col:
-        st.markdown(f"**{label}**")
-        if compare_mode == "LUT A vs Original":
-            out = apply_named(rgb, lut_a, strength_a)
-            img1 = save_rgb_to_png_path(rgb, f"orig_{label}_{i}")
-            img2 = save_rgb_to_png_path(out, f"lutA_{label}_{i}")
-            image_comparison(img1=img1, img2=img2, label1="Original", label2=f"{lut_a} ({strength_a:.2f})")
-        else:
-            a_img = apply_named(rgb, lut_a, strength_a)
-            b_img = apply_named(rgb, lut_b, strength_b)
-            img1 = save_rgb_to_png_path(a_img, f"lutA_{label}_{i}")
-            img2 = save_rgb_to_png_path(b_img, f"lutB_{label}_{i}")
-            image_comparison(
-                img1=img1,
-                img2=img2,
-                label1=f"{lut_a} ({strength_a:.2f})",
-                label2=f"{lut_b} ({strength_b:.2f})",
-            )
+if st.session_state["media_mode"] == "Video":
+    video_path = _write_uploaded_to_temp(video_file)
+    frames_bgr, meta = extract_three_frames(video_path)
+    frames_rgb = [bgr_to_rgb_u8(f) for f in frames_bgr]
+    st.caption(f"Frames: start={meta['idxs'][0]}, mid={meta['idxs'][1]}, end={meta['idxs'][2]} | fps≈{meta['fps']:.2f}")
+    
+    # -----------------------------
+    # Previews (Row 2) -> 3 columns
+    # -----------------------------
+    st.subheader("Preview (Start / Middle / End)")
+    p1, p2, p3 = st.columns(3)
+    
+    lut_a = st.session_state["lut_a_name"]
+    strength_a = float(st.session_state["strength_a"])
+    compare_mode = st.session_state["compare_mode"]
+    lut_b = st.session_state.get("lut_b_name")
+    strength_b = float(st.session_state.get("strength_b", 1.0))
+    
+    for i, (col, label, rgb) in enumerate(zip([p1, p2, p3], ["Start", "Middle", "End"], frames_rgb)):
+        with col:
+            st.markdown(f"**{label}**")
+            if compare_mode == "LUT A vs Original":
+                out = apply_named(rgb, lut_a, strength_a)
+                img1 = save_rgb_to_png_path(rgb, f"orig_{label}_{i}")
+                img2 = save_rgb_to_png_path(out, f"lutA_{label}_{i}")
+                image_comparison(img1=img1, img2=img2, label1="Original", label2=f"{lut_a} ({strength_a:.2f})")
+            else:
+                a_img = apply_named(rgb, lut_a, strength_a)
+                b_img = apply_named(rgb, lut_b, strength_b)
+                img1 = save_rgb_to_png_path(a_img, f"lutA_{label}_{i}")
+                img2 = save_rgb_to_png_path(b_img, f"lutB_{label}_{i}")
+                image_comparison(
+                    img1=img1,
+                    img2=img2,
+                    label1=f"{lut_a} ({strength_a:.2f})",
+                    label2=f"{lut_b} ({strength_b:.2f})",
+                )
+else:
+    # Image mode
+    image_pil = Image.open(image_file).convert("RGB")
+    image_rgb_full = np.array(image_pil, dtype=np.uint8)
+    st.session_state["current_image_rgb"] = image_rgb_full  # Store full resolution for export
+    
+    # Resize for preview to speed up processing (max 1920px on longest side)
+    max_preview_size = 1920
+    if max(image_pil.width, image_pil.height) > max_preview_size:
+        scale = max_preview_size / max(image_pil.width, image_pil.height)
+        preview_width = int(image_pil.width * scale)
+        preview_height = int(image_pil.height * scale)
+        # Use LANCZOS for high-quality resampling (compatible with both old and new PIL)
+        try:
+            resample = Image.Resampling.LANCZOS
+        except AttributeError:
+            resample = Image.LANCZOS
+        image_pil_preview = image_pil.resize((preview_width, preview_height), resample)
+        image_rgb = np.array(image_pil_preview, dtype=np.uint8)
+    else:
+        image_rgb = image_rgb_full
+    
+    st.subheader("Preview")
+    lut_a = st.session_state["lut_a_name"]
+    strength_a = float(st.session_state["strength_a"])
+    compare_mode = st.session_state["compare_mode"]
+    lut_b = st.session_state.get("lut_b_name")
+    strength_b = float(st.session_state.get("strength_b", 1.0))
+    
+    if compare_mode == "LUT A vs Original":
+        out = apply_named(image_rgb, lut_a, strength_a)
+        img1 = save_rgb_to_png_path(image_rgb, "orig_image")
+        img2 = save_rgb_to_png_path(out, "lutA_image")
+        image_comparison(img1=img1, img2=img2, label1="Original", label2=f"{lut_a} ({strength_a:.2f})")
+    else:
+        a_img = apply_named(image_rgb, lut_a, strength_a)
+        b_img = apply_named(image_rgb, lut_b, strength_b)
+        img1 = save_rgb_to_png_path(a_img, "lutA_image")
+        img2 = save_rgb_to_png_path(b_img, "lutB_image")
+        image_comparison(
+            img1=img1,
+            img2=img2,
+            label1=f"{lut_a} ({strength_a:.2f})",
+            label2=f"{lut_b} ({strength_b:.2f})",
+        )
 
 st.divider()
 
@@ -679,8 +737,14 @@ st.divider()
 # Export
 # -----------------------------
 st.subheader("Export")
+lut_a = st.session_state["lut_a_name"]
 safe_lut = (lut_a or "none").replace(" ", "_")
-out_name = st.text_input("Output filename", value=f"export_{Path(video_file.name).stem}_{safe_lut}.mp4")
+
+if st.session_state["media_mode"] == "Video":
+    out_name = st.text_input("Output filename", value=f"export_{Path(video_file.name).stem}_{safe_lut}.mp4")
+else:
+    image_ext = Path(image_file.name).suffix.lower() or ".png"
+    out_name = st.text_input("Output filename", value=f"export_{Path(image_file.name).stem}_{safe_lut}{image_ext}")
 
 from shutil import which
 
@@ -874,7 +938,7 @@ def merge_audio(processed_video: str, original_video: str, out_path: str) -> str
     return processed_video
 
 
-def local_save_dialog(default_name: str, src_path: str) -> Optional[str]:
+def local_save_dialog(default_name: str, src_path: str, file_type: str = "video") -> Optional[str]:
     try:
         import tkinter as tk
         from tkinter import filedialog
@@ -883,10 +947,24 @@ def local_save_dialog(default_name: str, src_path: str) -> Optional[str]:
         root.withdraw()
         root.wm_attributes("-topmost", 1)
 
+        if file_type == "video":
+            filetypes = [("MP4 Video", "*.mp4"), ("All files", "*.*")]
+            defaultextension = ".mp4"
+        else:
+            filetypes = [
+                ("PNG Image", "*.png"),
+                ("JPEG Image", "*.jpg;*.jpeg"),
+                ("BMP Image", "*.bmp"),
+                ("TIFF Image", "*.tiff"),
+                ("WebP Image", "*.webp"),
+                ("All files", "*.*"),
+            ]
+            defaultextension = ".png"
+
         save_path = filedialog.asksaveasfilename(
-            defaultextension=".mp4",
+            defaultextension=defaultextension,
             initialfile=default_name,
-            filetypes=[("MP4 Video", "*.mp4"), ("All files", "*.*")],
+            filetypes=filetypes,
         )
         root.destroy()
 
@@ -898,32 +976,76 @@ def local_save_dialog(default_name: str, src_path: str) -> Optional[str]:
         return None
 
 
-if st.button("🚀 Export LUT A applied video"):
-    with st.spinner("Exporting..."):
-        tmp_dir = tempfile.mkdtemp()
-        raw_out = os.path.join(tmp_dir, "video_processed.mp4")
+if st.session_state["media_mode"] == "Video":
+    if st.button("🚀 Export LUT A applied video"):
+        with st.spinner("Exporting..."):
+            lut_a = st.session_state["lut_a_name"]
+            strength_a = float(st.session_state["strength_a"])
+            tmp_dir = tempfile.mkdtemp()
+            raw_out = os.path.join(tmp_dir, "video_processed.mp4")
 
-        # ✅ this is now defined (and prefers ffmpeg path)
-        processed_path = export_video_with_lut(video_path, raw_out, lut_a, strength_a)
+            # ✅ this is now defined (and prefers ffmpeg path)
+            processed_path = export_video_with_lut(video_path, raw_out, lut_a, strength_a)
 
-        # If processed export already includes audio, merge_audio will just re-copy safely
-        final_out = merge_audio(processed_path, video_path, os.path.join(tmp_dir, "video_with_audio.mp4"))
-        st.session_state["last_export_path"] = final_out
-        st.session_state["last_export_name"] = out_name
+            # If processed export already includes audio, merge_audio will just re-copy safely
+            final_out = merge_audio(processed_path, video_path, os.path.join(tmp_dir, "video_with_audio.mp4"))
+            st.session_state["last_export_path"] = final_out
+            st.session_state["last_export_name"] = out_name
+            st.session_state["last_export_type"] = "video"
 
-    st.success("Export complete.")
+        st.success("Export complete.")
+else:
+    # Image export
+    if st.button("🚀 Export LUT A applied image"):
+        with st.spinner("Exporting..."):
+            lut_a = st.session_state["lut_a_name"]
+            strength_a = float(st.session_state["strength_a"])
+            image_rgb = st.session_state.get("current_image_rgb")
+            if image_rgb is None:
+                st.error("Image not loaded. Please upload an image.")
+                st.stop()
+            processed_image = apply_named(image_rgb, lut_a, strength_a)
+            
+            # Determine output format from filename
+            out_ext = Path(out_name).suffix.lower() or ".png"
+            tmp_dir = tempfile.mkdtemp()
+            export_path = os.path.join(tmp_dir, out_name)
+            
+            # Save the processed image
+            Image.fromarray(processed_image, mode="RGB").save(export_path, format=out_ext[1:].upper() if out_ext[1:] in ["PNG", "JPEG", "JPG"] else "PNG")
+            
+            st.session_state["last_export_path"] = export_path
+            st.session_state["last_export_name"] = out_name
+            st.session_state["last_export_type"] = "image"
+
+        st.success("Export complete.")
 
 
 if "last_export_path" in st.session_state and Path(st.session_state["last_export_path"]).exists():
     export_path = st.session_state["last_export_path"]
     export_name = st.session_state.get("last_export_name", "export.mp4")
+    export_type = st.session_state.get("last_export_type", "video")
 
     with open(export_path, "rb") as f:
-        st.download_button("⬇️ Download exported video", data=f.read(), file_name=export_name, mime="video/mp4")
+        if export_type == "video":
+            st.download_button("⬇️ Download exported video", data=f.read(), file_name=export_name, mime="video/mp4")
+        else:
+            # Determine mime type from extension
+            ext = Path(export_name).suffix.lower()
+            mime_map = {
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".bmp": "image/bmp",
+                ".tiff": "image/tiff",
+                ".webp": "image/webp",
+            }
+            mime = mime_map.get(ext, "image/png")
+            st.download_button("⬇️ Download exported image", data=f.read(), file_name=export_name, mime=mime)
 
     if ENABLE_LOCAL_SAVE_DIALOG and (not running_on_streamlit_cloud()) and gui_available():
         if st.button("💾 Save As… (local)"):
-            saved = local_save_dialog(export_name, export_path)
+            saved = local_save_dialog(export_name, export_path, export_type)
             if saved:
                 st.success(f"Saved to: {saved}")
             else:
