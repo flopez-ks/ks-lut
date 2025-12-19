@@ -641,8 +641,6 @@ def apply_named(rgb: np.ndarray, lut_name: str, strength: float) -> np.ndarray:
     return apply_lut_trilinear(rgb, lut, strength=strength)
 
 
-
-
 # -----------------------------
 # Previews (Row 2) -> 3 columns
 # -----------------------------
@@ -705,7 +703,12 @@ def get_ffmpeg_path() -> Optional[str]:
 
 def export_video_with_lut_opencv(input_path: str, output_path: str, lut_name: str, strength: float, assume_bgr_major: bool):
     """Slow fallback export using OpenCV + our LUT implementation."""
-    lut = load_cube_lut(lut_map[lut_name], assume_bgr_major=assume_bgr_major)
+    lut = load_cube_lut(
+        lut_map[lut_name],
+        assume_bgr_major=assume_bgr_major,
+        repair=bool(st.session_state.get("repair_incomplete_lut", True)),
+        max_missing_rows=int(st.session_state.get("repair_max_missing_rows", 256)),
+    )
 
     cap = cv2.VideoCapture(input_path)
     if not cap.isOpened():
