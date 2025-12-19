@@ -115,7 +115,12 @@ def _parse_floats(line: str) -> List[float]:
 
 
 @st.cache_data(show_spinner=False)
-def load_cube_lut(cube_bytes: bytes, assume_bgr_major: bool = True) -> CubeLUT:
+def load_cube_lut(
+    cube_bytes: bytes,
+    assume_bgr_major: bool = True,
+    repair: bool = False,
+    max_missing_rows: int = 256,
+) -> CubeLUT:
     text = cube_bytes.decode("utf-8", errors="ignore").splitlines()
 
     size = None
@@ -151,16 +156,36 @@ def load_cube_lut(cube_bytes: bytes, assume_bgr_major: bool = True) -> CubeLUT:
         raise ValueError("Could not find LUT_3D_SIZE in .cube file.")
 
     expected = size * size * size
-    if len(data) < expected:
-        raise ValueError(f".cube incomplete: got {len(data)} rows, expected {expected}.")
+    got = len(data)
 
-    data = np.asarray(data[:expected], dtype=np.float32)
-    table = data.reshape((size, size, size, 3))
+    # --- Repair mode: pad missing rows (common when a file is slightly truncated) ---
+    if got < expected:
+        missing = expected - got
+        if repair and missing <= int(max_missing_rows):
+            if got == 0:
+                # extreme case: no LUT rows at all -> cannot repair meaningfully
+                raise ValueError(
+                    f".cube has 0 rows but expects {expected}. Cannot repair."
+                )
+            last = np.asarray(data[-1], dtype=np.float32)
+            pad = np.repeat(last[None, :], missing, axis=0)
+            data = np.asarray(data, dtype=np.float32)
+            data = np.vstack([data, pad]).astype(np.float32)
+        else:
+            raise ValueError(
+                f".cube incomplete/truncated: LUT_3D_SIZE {size} expects {expected} rows, "
+                f"but file has {got} rows (missing {missing})."
+            )
+    else:
+        # If there are extra rows, just ignore extras.
+        data = np.asarray(data[:expected], dtype=np.float32)
 
+    table = data.reshape((size, size, size, 3))  # [b,g,r,3] if assumption holds
     if not assume_bgr_major:
         table = table.transpose(2, 1, 0, 3)
 
     return CubeLUT(size=size, domain_min=domain_min, domain_max=domain_max, table=table)
+
 
 
 def apply_lut_trilinear(rgb_u8: np.ndarray, lut: CubeLUT, strength: float = 1.0) -> np.ndarray:
@@ -366,6 +391,8 @@ def apply_preset_early(p: dict, lut_names: List[str]) -> None:
 # ============================================================
 # Session defaults
 # ============================================================
+st.session_state.setdefault("repair_incomplete_lut", True)
+st.session_state.setdefault("repair_max_missing_rows", 256)  # safety cap
 st.session_state.setdefault("uploaded_luts", {})
 st.session_state.setdefault("assume_order", False)
 st.session_state.setdefault("compare_mode", "LUT A vs Original")
@@ -444,6 +471,19 @@ with st.sidebar:
     st.divider()
 
     st.checkbox("If colors look wrong, try alternate .cube order", key="assume_order")
+    
+    st.checkbox("Repair incomplete .cube (pad missing rows)", key="repair_incomplete_lut")
+    if st.session_state["repair_incomplete_lut"]:
+        st.number_input(
+            "Max missing rows to repair",
+            min_value=1,
+            max_value=5000,
+            value=int(st.session_state.get("repair_max_missing_rows", 256)),
+            step=1,
+            key="repair_max_missing_rows",
+            help="If the LUT is missing more than this many rows, we won't try to repair it."
+        )
+
     assume_bgr_major = not st.session_state["assume_order"]
 
     lut_map = get_lut_map()
@@ -469,9 +509,13 @@ with st.sidebar:
         for name, b in sorted(lut_map.items(), key=lambda kv: kv[0].lower()):
             with st.expander(name, expanded=False):
                 try:
-                    lut = load_cube_lut(b, assume_bgr_major=assume_bgr_major)
-                    applied = apply_lut_trilinear(ex_rgb, lut, strength=1.0)
-                    st.image(applied, caption="Applied on example image", use_container_width=True)
+                    lut = load_cube_lut(
+                        b,
+                        assume_bgr_major=assume_bgr_major,
+                        repair=bool(st.session_state["repair_incomplete_lut"]),
+                        max_missing_rows=int(st.session_state["repair_max_missing_rows"]),
+                    )
+
 
                     r = st.columns([1, 1])
                     with r[0]:
@@ -588,8 +632,15 @@ lut_map = get_lut_map()
 
 
 def apply_named(rgb: np.ndarray, lut_name: str, strength: float) -> np.ndarray:
-    lut = load_cube_lut(lut_map[lut_name], assume_bgr_major=assume_bgr_major)
+    lut = load_cube_lut(
+        lut_map[lut_name],
+        assume_bgr_major=assume_bgr_major,
+        repair=bool(st.session_state["repair_incomplete_lut"]),
+        max_missing_rows=int(st.session_state["repair_max_missing_rows"]),
+    )
     return apply_lut_trilinear(rgb, lut, strength=strength)
+
+
 
 
 # -----------------------------
